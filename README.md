@@ -1,6 +1,6 @@
 ## Description
+소스코드와 Git 이력에서 **비영어권 문자(한글, 중국어)**를 검사하는 CLI 도구입니다.
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
 
 ## Project setup
 
@@ -8,18 +8,7 @@
 $ npm install
 ```
 
-## Compile and run the project
 
-```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
-```
 
 ## 명령어 옵션
 ```bash
