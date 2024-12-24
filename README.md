@@ -1,53 +1,129 @@
-## Description
-소스코드와 Git 이력에서 **비영어권 문자(한글, 중국어)**를 검사하는 CLI 도구입니다.
+# **Non-English Character Inspector**
 
+A CLI tool to inspect **non-English characters (Korean, Chinese)** in source code files and Git commit history. The tool helps developers identify and review files or Git commits that include unwanted non-English content.
 
-## Project setup
+---
+
+## **Project Setup**
+
+### **1. Install Dependencies**
+Make sure you have **Node.js** installed, and run the following command to install the required dependencies:
 
 ```bash
 $ npm install
 ```
 
+### **2. Build the Project**
+If you are using TypeScript, compile the code into JavaScript:
 
-
-## 명령어 옵션
 ```bash
-
-$ node dist/main.js inspect [옵션]
-
-# 예시 (git 커밋 이력 검사 및 임시 클론된 repo 삭제)
-$ node dist/main.js inspect --url <repo-url> --git --delete
-
+$ npm run build
 ```
-| **옵션**               | **설명**                                     | **기본값** |
-|------------------------|---------------------------------------------|------------|
-| `-p, --path <path>`    | 검사할 **로컬 프로젝트 경로**를 설정합니다.   | `.`        |
-| `-u, --url <url>`      | 검사할 원격 **Git 리포지토리 URL**을 입력합니다. | 없음       |
-| `-g, --git`            | Git 커밋 이력도 함께 검사합니다.              | 없음       |
-| `-d, --delete`         | 임시 클론된 리포지토리를 삭제합니다.          | 없음       |
+
+### **3. Configure `.env` File**
+To use the `inspect-urls` command, you need to configure a `.env` file with the following variables:
 
 
 
-
-## **4. 주의 사항**
-
-### **1. `node_modules` 및 미디어 파일 제외**
-- `node_modules` 폴더와 다음 파일들은 검사에서 자동으로 제외됩니다:
-    - 이미지 파일: `.png`, `.jpg`, `.jpeg`, `.gif`, `.svg`, `.webp` 등
-    - 음악 파일: `.mp3`, `.wav`, `.ogg`, `.flac`, `.aac`, `.m4a` 등
-    - 영상 파일: `.mp4`, `.mkv`, `.avi`, `.mov`, `.flv`, `.wmv`, `.webm` 등
-    - 기타 파일: `.bin`, `.zip`, `.pdf`, `.rlp`
+- **`GITLAB_ACCESS_TOKEN`**: Your GitLab personal access token.
+- **`GITLAB_BASE_URL`**: GitLab API base URL.
+- **`GITLAB_START_GROUP_ID`**: The starting group ID for inspecting projects.
 
 ---
 
-### **2. 2GB 이상의 파일**
-- **2GB**를 초과하는 파일은 검사에서 자동으로 건너뜁니다.
+## **Command Options**
+
+Run the tool using the following syntax:
+
+```bash
+$ node dist/main.js inspect [options]
+```
+
+### **Available Options**
+
+| **Option**             | **Description**                                                                 | **Default** |
+|------------------------|--------------------------------------------------------------------------------|-------------|
+| `-p, --path <path>`    | Set the **local project path** to inspect.                                      | `.`         |
+| `-u, --url <url>`      | Specify the **Git repository URL** to inspect.                                  | None        |
+| `-g, --git`            | Inspect the **Git commit history** as well.                                     | None        |
+| `-d, --delete`         | Delete the **temporary cloned repository**.                                     | None        |
+| `--no-filter`          | Do not filter branches updated over 2 years ago (includes all branches in scan) | Filter enabled |
 
 ---
 
-### **3. 원격 리포지토리 (`--url` 옵션)**
-- `--url` 옵션으로 원격 **Git 리포지토리**를 검사할 경우,  
-  임시 디렉토리가 **`temp-clone`** 이름으로 생성됩니다.
+## **Features**
 
-- **`--delete` 옵션**을 사용하면, 검사 완료 후 **임시 폴더**가 자동으로 삭제됩니다.  
+### **1. Inspect Files**
+- Detect non-English characters (Korean, Chinese) in source code files.
+- **Excluded Files:** Automatically excludes unnecessary files such as:
+  - **Node modules**: `node_modules/`
+  - **Media files**: `.png`, `.jpg`, `.mp3`, `.mp4`, etc.
+  - **Binary files**: `.zip`, `.pdf`, `.bin`, etc.
 
+---
+
+### **2. Inspect Git Commit History**
+- Search for non-English characters within files in the Git commit history.
+- Identify issues even in **deleted files** and inspect **commit messages**.
+- Supports cloning remote repositories temporarily for inspection.
+
+---
+
+
+
+
+
+## **Notes**
+
+### **1. Excluded Files**
+The following files and directories are automatically excluded from inspection:
+- `node_modules` directory
+- Media files: `.png`, `.jpg`, `.jpeg`, `.gif`, `.mp4`, `.mp3`, etc.
+- Binary files: `.zip`, `.pdf`, `.bin`, `.dll`
+
+### **2. Remote Repository Support**
+- When using the `--url` option to inspect a remote Git repository:
+  - A temporary directory `temp-clone` is created.
+  - Use the `--delete` option to automatically remove this directory after the inspection.
+
+### **3. Active Branch Filtering**
+- For Git commit history inspection, only **active branches** updated within the last 2 years are scanned by default.
+- Use the `--no-filter` option to include **all branches**, regardless of their last update time.
+
+### **4. GitLab Group Inspection**
+- Fetch all project URLs from a specified GitLab group recursively.
+- Inspect each project for non-English content in files and Git history.
+- Automatically retries failed operations up to 3 times.
+- Saves inspection results in `batch-results-<index>.json` files.
+- Failed projects are logged in `failed-projects.json`.
+
+---
+
+## **Advanced Examples**
+
+
+
+- Inspect a **specific directory**:
+  ```bash
+  $ node dist/main.js inspect --path /path/to/project
+  ```
+
+- Inspect a **remote Git repository**:
+  ```bash
+  $ node dist/main.js inspect --url git@github.com:user/repo.git --git
+  ```
+
+- Inspect and **delete the cloned repository** after the inspection:
+  ```bash
+  $ node dist/main.js inspect --url git@github.com:user/repo.git --git --delete
+  ```
+
+- Inspect **multiple GitLab projects** from a predefined group:
+  ```bash
+  $ node dist/main.js inspect-urls
+  ```
+
+- Include **all branches** (including those updated over 2 years ago):
+  ```bash
+  $ node dist/main.js inspect-urls --no-filter
+  ```

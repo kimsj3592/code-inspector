@@ -1,94 +1,249 @@
-import simpleGit from 'simple-git';
-import * as path from 'path';
-import * as fs from 'fs';
+import { spawn } from 'child_process';
+import { Readable } from 'stream';
+import * as readline from 'readline';
 
-export async function inspectGitHistory(targetPath: string) {
-  const git = simpleGit(targetPath);
-  console.log(`\n🔍 Inspecting Git history in: ${targetPath}\n`);
+const MAX_CONCURRENT_BRANCHES = 10;
+const TWO_YEARS_AGO = new Date(
+  new Date().setFullYear(new Date().getFullYear() - 2),
+);
 
-  // 전체 git commit log
-  const log = await git.log();
-  const results: Record<
-    string,
-    { commit: string; date: string; lines: Set<number> }
-  > = {};
+const excludeExtensions = [
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.svg',
+  '.webp',
+  '.mp3',
+  '.wav',
+  '.ogg',
+  '.flac',
+  '.aac',
+  '.m4a',
+  '.mp4',
+  '.mkv',
+  '.avi',
+  '.mov',
+  '.flv',
+  '.wmv',
+  '.webm',
+  '.zip',
+  '.pdf',
+  '.bin',
+  '.rlp',
+  '.dat',
+  '.dll',
+  '.pxm',
+  '.icns',
+  '.node',
+];
 
-  for (const commit of log.all) {
-    try {
-      // 특정 커밋의 파일 변경 이력(diff)
-      const diff: string = await git.show([commit.hash]);
-      const files: string[] = parseChangedFiles(diff);
-
-      for (const file of files) {
-        const filePath = path.join(targetPath, file);
-
-        // file 유무, 파일 상태
-        if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-          const content = fs.readFileSync(filePath, 'utf8');
-          const lines = content.split('\n');
-
-          lines.forEach((line, index) => {
-            if (containsNonEnglish(line)) {
-              if (!results[file]) {
-                // 객체 동적 키 사용
-                results[file] = {
-                  commit: commit.hash,
-                  date: commit.date,
-                  // Set 으로 중복된 내용 삭제
-                  lines: new Set<number>(),
-                };
-              }
-              results[file].lines.add(index + 1);
-            }
-          });
-        }
-      }
-    } catch (err) {
-      console.error(
-        `❌ Error processing commit ${commit.hash}: ${err.message}`,
-      );
-    }
-  }
-
-  printResults(results);
+function isBinaryFile(content: Buffer): boolean {
+  return content.some((byte) => byte <= 8 || (byte >= 14 && byte <= 31));
 }
 
-function parseChangedFiles(diff: string): string[] {
-  const changedFiles = [];
-  const diffLines = diff.split('\n');
-  for (const line of diffLines) {
-    if (line.startsWith('+++ b/')) {
-      const filePath = line.replace('+++ b/', '').trim();
+function executeGitCommand(args: string[], cwd: string): Readable {
+  const gitProcess = spawn('git', args, { cwd });
+  return gitProcess.stdout;
+}
 
-      // node_modules 폴더 내의 파일 제외
-      if (!filePath.includes('node_modules')) {
-        changedFiles.push(filePath);
+export async function inspectGitHistory(
+  targetPath: string,
+  filterOldBranches = true,
+) {
+  console.log(`\n🔍 Inspecting Git history in: ${targetPath}\n`);
+
+  const branchListStream = executeGitCommand(
+    ['ls-remote', '--heads'],
+    targetPath,
+  );
+
+  const branchNames = await parseBranchList(branchListStream);
+  console.log(`📂 Total branches found: ${branchNames.length}`);
+
+  const branchesToInspect = filterOldBranches
+    ? await filterActiveBranches(targetPath, branchNames)
+    : branchNames;
+
+  console.log(
+    `📂 Branches selected for inspection: ${branchesToInspect.length}`,
+  );
+
+  const results: { branch: string; commit: string; file: string }[] = [];
+
+  for (let i = 0; i < branchesToInspect.length; i += MAX_CONCURRENT_BRANCHES) {
+    const batch = branchesToInspect.slice(i, i + MAX_CONCURRENT_BRANCHES);
+    console.log(
+      `\n🚀 Processing batch ${Math.ceil(i / MAX_CONCURRENT_BRANCHES)}`,
+    );
+
+    await Promise.all(
+      batch.map(async (branch) => {
+        try {
+          console.log(`🔍 Processing branch: ${branch}`);
+          const branchResults = await processBranchWithStream(
+            targetPath,
+            branch,
+          );
+          results.push(...branchResults);
+        } catch (err) {
+          console.error(
+            `❌ Error processing branch ${branch}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+      }),
+    );
+  }
+
+  printFinalResults(results);
+  return results;
+}
+
+async function parseBranchList(branchListStream: Readable): Promise<string[]> {
+  const rl = readline.createInterface({ input: branchListStream });
+  const branches: string[] = [];
+
+  for await (const line of rl) {
+    const match = line.split('\t')[1]?.replace('refs/heads/', '').trim();
+    if (match) branches.push(match);
+  }
+
+  return branches;
+}
+
+async function filterActiveBranches(
+  targetPath: string,
+  branchNames: string[],
+): Promise<string[]> {
+  const activeBranches: string[] = [];
+  await Promise.all(
+    branchNames.map(async (branch) => {
+      try {
+        const logStream = executeGitCommand(
+          ['log', '-1', '--format=%ci', `origin/${branch}`],
+          targetPath,
+        );
+
+        const lastCommitDate = await parseLastCommitDate(logStream);
+        if (lastCommitDate > TWO_YEARS_AGO) {
+          activeBranches.push(branch);
+        }
+      } catch (err) {
+        console.warn(
+          `⚠️ Could not determine last commit date for ${branch}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }),
+  );
+  return activeBranches;
+}
+
+async function parseLastCommitDate(logStream: Readable): Promise<Date> {
+  const rl = readline.createInterface({ input: logStream });
+
+  const line = await new Promise<string | undefined>((resolve) => {
+    rl.once('line', resolve);
+    rl.once('close', () => resolve(undefined));
+  });
+  if (line) {
+    return new Date(line.trim());
+  }
+
+  throw new Error('No commit date found.');
+}
+
+async function processBranchWithStream(targetPath: string, branch: string) {
+  const results: { branch: string; commit: string; file: string }[] = [];
+  const diffStream = executeGitCommand(
+    ['log', '-p', `origin/${branch}`, '--since=2.years', '--pretty=format:%H'],
+    targetPath,
+  );
+
+  const parsedResults = await processGitDiffStream(diffStream, branch);
+  results.push(...parsedResults);
+
+  return results;
+}
+
+async function processGitDiffStream(diffStream: Readable, branch: string) {
+  const rl = readline.createInterface({ input: diffStream });
+
+  const fileRegex = /^diff --git a\/(.+?) b\/(.+?)$/;
+
+  let currentCommit: string | null = null;
+  let currentFile: string | null = null;
+  const results: { branch: string; commit: string; file: string }[] = [];
+
+  for await (const line of rl) {
+    if (/^[a-f0-9]{40}$/.test(line)) {
+      currentCommit = line.trim();
+      continue;
+    }
+
+    const fileMatch = line.match(fileRegex);
+    if (fileMatch) {
+      currentFile = fileMatch[2];
+
+      if (excludeExtensions.some((ext) => currentFile?.endsWith(ext))) {
+        currentFile = null;
+      }
+      continue;
+    }
+
+    if (currentFile && line.startsWith('+')) {
+      const content = line.slice(1).trim();
+
+      if (isBinaryFile(Buffer.from(content, 'utf8'))) {
+        currentFile = null;
+        continue;
+      }
+
+      if (containsNonEnglish(content)) {
+        results.push({
+          branch,
+          commit: currentCommit!.slice(0, 7),
+          file: currentFile,
+        });
+        currentFile = null;
       }
     }
   }
-  return changedFiles;
+
+  return results;
 }
 
 function containsNonEnglish(content: string): boolean {
-  const nonEnglishRegex = /[\u4E00-\u9FFF\uAC00-\uD7AF]+/; // 한글 및 중국어 감지
+  const nonEnglishRegex = /[\u4E00-\u9FFF\uAC00-\uD7AF]+/;
   return nonEnglishRegex.test(content);
 }
 
-function printResults(
-  results: Record<string, { commit: string; date: string; lines: Set<number> }>,
+function printFinalResults(
+  results: { branch: string; commit: string; file: string }[],
 ) {
-  if (Object.keys(results).length === 0) {
-    console.log('✅ No non-English content found in Git history!');
+  if (results.length === 0) {
+    console.log('\n✅ No non-English content found.');
     return;
   }
 
-  console.log('❗ Non-English content detected in Git history:\n');
-  for (const [file, data] of Object.entries(results)) {
-    console.log(`📄 File: ${file}`);
-    console.log(`   Commit: ${data.commit}`);
-    console.log(`   Date: ${data.date}`);
-    console.log(`   Total Issues: ${data.lines.size}`);
-    console.log(`   Lines: ${[...data.lines].join(', ')}`);
+  console.log('\n🔍 Final Results:');
+  const groupedResults: Record<string, Record<string, Set<string>>> = {};
+
+  results.forEach(({ branch, commit, file }) => {
+    if (!groupedResults[branch]) groupedResults[branch] = {};
+    if (!groupedResults[branch][commit])
+      groupedResults[branch][commit] = new Set();
+    groupedResults[branch][commit].add(file);
+  });
+
+  for (const [branch, commits] of Object.entries(groupedResults)) {
+    console.log(`\n🔍 Branch: ${branch}`);
+    for (const [commit, files] of Object.entries(commits)) {
+      console.log(`  📝 Commit: ${commit}`);
+      console.log(`  📄 Files: ${Array.from(files).join(', ')}`);
+    }
   }
-  console.log('\n🔍 Git History Inspection Complete!');
 }
